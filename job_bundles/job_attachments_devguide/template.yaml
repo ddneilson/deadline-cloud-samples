@@ -1,0 +1,24 @@
+specificationVersion: jobtemplate-2023-09
+name: "Developer Guide: Job Attachments Explorer"
+parameterDefinitions:
+- name: ScriptFile
+  type: PATH
+  default: script.sh
+  dataFlow: IN
+  objectType: FILE
+step:
+- name: Step
+  hostRequirements:
+    attributes:
+    - name: attr.worker.os.family
+      anyOf:
+      - linux
+  script:
+    actions:
+      onRun:
+        command: /bin/bash
+        args:
+        - "{{Param.ScriptFile}}"
+
+
+# Final form, after all modifications outlined in the Developer Guide.

@@ -241,6 +241,10 @@ aws deadline update-queue --farm-id $FARM_ID --queue-id $QUEUE2_ID \
   --required-file-system-location-names-to-add FSComm FS2
 ```
 
+Note that if a queue has any required filesystem locations, then that queue cannot be associated with a
+[service-managed fleet](https://docs.aws.amazon.com/deadline-cloud/latest/userguide/smf-manage.html) because
+that fleet has no way to mount your shared filesystems.
+
 A queue's configuration also includes a list of allowed storage profiles that applies to jobs submitted to
 and fleets associated with that queue. Only storage profiles that define filesystem locations for all of the required filesystem
 locations of that queue are allowed in the queue's list of allowed storage profiles. 
@@ -418,45 +422,80 @@ Submit jobs with different storage profiles to see the changes in the path mappi
 
 ## 3. Job Attachments
 
+Link: https://docs.aws.amazon.com/deadline-cloud/latest/userguide/storage-job-attachments.html
 
-When you submit a job to Deadline Cloud you can optionally provide the storage profile id for the for that job. This storage
-profile is the submitting workstation's profile, and describes the filesystem configuration that the file paths that the job's
-input and output file references are written for. When using the [Deadline Cloud CLI](https://pypi.org/project/deadline/)
-or a Deadline Cloud submitter, the application's implementation of the job attachments feature uses a job's storage profile
-to identify the input files that will not be available on a worker host, and thus should be uploaded to Amazon S3 as part of
-job submission. The job's storage profile also helps the job attachments feature identify which of a job's output files
-are in locations that will not be available on your workstation and need to be uploaded to Amazon S3.
+- Job attachments is a feature for making files that are not in shared filesystem locations available for your jobs, and making
+  the file outputs of a job available when they are not written to a shared filesystem location. 
+- Essential for service-managed fleets, since there are no filesystem locations that are shared between hosts. Useful
+  for customer-managed fleets for things like job-specific script files, one-off input files or local edits that you do not want
+  to store on a shared filesystem.
+- It manages shuttling files betweeen hosts by using Amazon S3 as an intermediary; storing the objects in S3 in a way that
+  eliminates the need to re-upload a file if its content exactly matches a previously uploaded file.
+
+When using a job bundle to submit a job, either using the [Deadline Cloud CLI](https://pypi.org/project/deadline/)
+or a Deadline Cloud submitter, the implementation of the job attachments feature uses a job's storage profile
+and the queue's required filesystem locations to identify the input files that will not be available on a worker host, and
+thus should be uploaded to Amazon S3 as part of job submission. Similarly, the fleet's storage profile also helps the job attachments
+feature identify which of a job's output files are in locations that will not be available on your workstation and need to
+be uploaded to Amazon S3.
+
+### 3.1. Submitting Files with a Job
+
+- In CloudShell, using the worker running in a separate tab.
+
+- `git clone https://github.com/aws-deadline/deadline-cloud-samples.git`
+- `cp -r deadline-cloud-samples/job_bundles/job_attachments_devguide ~/`
+
+- Highlight the ScriptFile job parameter, it's default value being relative to the bundle's directory, and dataFlow IN.
+  What that means for job attachments.
+- Configure deadline CLI for farm & Q1. Submit the job using the deadline CLI. Point out that the script file was uploaded.
+- `deadline job get` to show the manifest.
+- Show layout of objects in S3.
+- Modify the script file to print the contents of the path mapping rules file (pass an arg that is the file location & cat it)
+- Resubmit the job. Point out that the script file uploaded because it changed.
+- Show that job attachments adds to the list of path mapping rules.
+
+- Refer to Open Job Description wiki page on creating jobs; section on path mapping for additional information.
+
+- Location in asset_references needing to be communicated via a path-type parameter to get automatic path mapping, else
+  use the path mapping rules file.
+  - Add an asset_references file that adds an input file that's in /tmp; any contents.
+  - Submit the job.
+  - Show the path mapping rules that result. Talk about the location of the new file not being available in the
+    job template.
+
+- Something about asset roots? How they're determined?
+
+#### 3.1.1. Input Files with Storage Profiles
+
+- Make one of the `WSAll` dirs and add a file to it. 
+- Add that file to the asset references input files list.
+- Submit the job, and show that the newly added file is not uploaded.
+
+- Copy the script file outside of the bundle dir (e.g. to /tmp/job_inputs). Show that there's a permissions prompt when submitting.
+- Then set LOCAL filesystem location. Submit to demonstrate that the prompt no longer appears.
+
+- Do a submission with no storage profile. All files are uploaded via job attachments.
+
+- Need to include something customer-facing on why this is the way that it is.
+
+### 3.2. Getting Output Files from a Job
+
+- Extend the example bundle to add an output directory. dataFlow OUT job parameter; objectType DIR.
+- Modify the script to also write a file to the output dir (pass in the outdir as an arg).
+- Submit the job.
+- Mention the path mapping rule being added for the output dir.
+- Show the file that is uploaded to S3, the current S3 object layout, the manifest file, and how to get those using the deadline CLI.
+
+### 3.3. Using Files Output from a Step in a Dependent Step
+
+- Extend example to add a dependent step. Have that step write the sha256sum, or some such, of the prev step's
+  output file to a new file.
+- Submit the job. Show the dependent step fetching the prev step's output file.
 
 -----
 
 # Notes
-
-## Storage Profiles and Path Mapping
-
-- Storage profile describes the filesystem that is used by Jobs on a host (workstation or worker).
-- Storage profile contains a list of file system locations on a particular host configuration. There are two types of
-  profiles:
-    * `SHARED` -- Location on the host where a network fileshare is mounted/located.
-    * `LOCAL` -- A directory on the host's local disk where asset files for Jobs are located, and/or outputs for Jobs will be placed. i.e.
-      Location on the local disk that will be referenced in a Job Bundle's asset references. Known and trusted locations on the disk
-      for job attachments.
-- Does not mount/interact with shared storage; just a way for you to tell Deadline Cloud how you have your infrastructure set up so that
-  knows what path mapping rules to set up.
-
-Do a worked example with a diagram. 2 network fileshares (A&B). Two workstation configs - each with only one network fileshare,
-and a single local dir; one of each OS. One POSIX worker configuration with only the network fileshares mounted.
-
-Talk about a job being submitted from each workstation and the path mapping rules that each will have available to it when running
-on the worker host. For the LOCAL files refer forward to job attachments & say something like "if any LOCAL locations are referenced for
-JA, then a temporary path on the worker is created as the destination of that LOCAL filesystem location's path mapping rule"
-
-- On the Queue:
-    - `allowedStorageProfileIds`
-        - For a CMF w/ a storage profile to be associated to the Queue, the Fleet's storage profile id must be in this list.
-        - To submit a Job with a storage profile id, the id must be in this list.
-    - `requiredFileSystemLocations`
-        - To add a storage profile to the Queue's `allowedStorageProfileIds`, the storage profile must define file system locations
-          for all of these names.
 
 ## Job Attachments
 
