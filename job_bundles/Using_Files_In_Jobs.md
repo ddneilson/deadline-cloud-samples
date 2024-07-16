@@ -422,6 +422,9 @@ Submit jobs with different storage profiles to see the changes in the path mappi
 
 ## 3. Job Attachments
 
+Job attachments is a feature for making files that are not in shared filesystem locations available for your jobs, and saving
+the file outputs of a job when they are not written to a shared filesystem location. ... continue...
+
 Link: https://docs.aws.amazon.com/deadline-cloud/latest/userguide/storage-job-attachments.html
 
 - Job attachments is a feature for making files that are not in shared filesystem locations available for your jobs, and making
@@ -439,12 +442,117 @@ thus should be uploaded to Amazon S3 as part of job submission. Similarly, the f
 feature identify which of a job's output files are in locations that will not be available on your workstation and need to
 be uploaded to Amazon S3.
 
+This demonstration of job attachments in this section uses the farm, fleet, queues, and storage profiles configurations as described in the
+[sample project infrastructure](#1-sample-project-infrastructure) and [sections describing storage profiles](#2-storage-profiles-and-path-mapping).
+We recommend going through those sections.
+
+For this demonstration, you will use one of Dealine Cloud's sample job bundles as a starting point, and modify it to
+explore job attachment's functionality as you go through the subsections. [Job bundles](README) are the best way to formulate
+your jobs for use with job attachments. They encapsulate an
+[Open Job Description](https://github.com/OpenJobDescription/openjd-specifications/wiki) Job Template in a directory with
+additional files that list the files and directories required by jobs that are submitted using the job bundle.
+If you are not familiar with job bundles, then we recommend going through the [job bundles README](README) to
+learn more before proceeding.
+
 ### 3.1. Submitting Files with a Job
 
-- In CloudShell, using the worker running in a separate tab.
+AWS Deadline Cloud's job attachment feature enables job workflows where some, or all, of a job's input files
+are not available in filesystem locations that are shared to your worker hosts. Such as when running jobs
+in a service-managed fleet, or when those files only exist on your workstations local drive. When you submit a
+job using a job bundle, that job bundle can include lists of the input files and directories that the job needs to
+run. The job attachments implementation will identify which of these input files are not located in shared filesystem
+locations that will be available on the worker host where the job runs, uploads those files to Amazon S3, and then
+downloads them to the worker host when the job is running. This section demonstrates how job attachments
+identifies the files to upload, how those files are organized in Amazon S3, and how they are made available
+on worker hosts for your jobs to use.
 
-- `git clone https://github.com/aws-deadline/deadline-cloud-samples.git`
-- `cp -r deadline-cloud-samples/job_bundles/job_attachments_devguide ~/`
+Start by cloning the  [Deadline Cloud samples GitHub repository](https://github.com/aws-deadline/deadline-cloud-samples) into your 
+[AWS CloudShell](https://docs.aws.amazon.com/cloudshell/latest/userguide/welcome.html) environment, and copying the
+`job_attachments_devguide` job bundle into your home directory:
+
+```bash
+git clone https://github.com/aws-deadline/deadline-cloud-samples.git
+cp -r deadline-cloud-samples/job_bundles/job_attachments_devguide ~/
+```
+
+The [Deadline Cloud CLI](https://pypi.org/project/deadline/) can submit job bundles, so install that as well:
+
+```bash
+pip install deadline --upgrade
+```
+
+The `job_attachments_devguide` job bundle has a single step with one task that runs a bash shell script whose filesystem
+location is passed as a job parameter. The job parameter's definition is:
+
+```yaml
+...
+- name: ScriptFile
+  type: PATH
+  default: script.sh
+  dataFlow: IN
+  objectType: FILE
+...
+```
+
+The `dataFlow` property's `IN` value tells job attachments that the value of the `ScriptFile` parameter should be treated as
+an input to the job. The value of `default` is a relative location to the job bundle's directory, but can also be an absolute
+path. Putting those together, this means that the `script.sh` file in the job bundle's directory is an input file that is required
+for this job to run.
+
+Next, submit the job to queue `Q1` and you'll see that a single file is hashed and then uploaded:
+
+```bash
+# Change the value of FARM_ID to your farm's identifier
+FARM_ID=farm-00112233445566778899aabbccddeeff
+# Change the value of QUEUE1_ID to queue Q1's identifier
+QUEUE1_ID=queue-00112233445566778899aabbccddeeff
+
+deadline bundle submit --farm-id $FARM_ID --queue-id $QUEUE1_ID job_attachments_devguide/
+```
+
+Output:
+
+```bash
+Submitting to Queue: Q1
+...
+Hashing Attachments  [####################################]  100%
+Hashing Summary:
+    Processed 1 file totaling 39.0 B.
+    Skipped re-processing 0 files totaling 0.0 B.
+    Total processing time of 0.0327 seconds at 1.19 KB/s.
+
+Uploading Attachments  [####################################]  100%
+Upload Summary:
+    Processed 1 file totaling 39.0 B.
+    Skipped re-processing 0 files totaling 0.0 B.
+    Total processing time of 0.25639 seconds at 152.0 B/s.
+
+Waiting for Job to be created...
+Submitted job bundle:
+   job_attachments_devguide/
+Job creation completed successfully
+job-74148c13342e4514b63c7a7518657005
+```
+
+You can use the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-welcome.html) to see the objects that were
+uploaded to Amazon S3:
+
+```bash
+# The name of queue `Q1`'s job attachments S3 bucket
+JA_S3_BUCKET=$(
+  aws deadline get-queue --farm-id $FARM_ID --queue-id $QUEUE1_ID \
+  | jq -r '.jobAttachmentSettings.s3BucketName'
+)
+
+aws s3 ls s3://$JA_S3_BUCKET --recursive
+```
+
+Output:
+
+```bash
+2024-07-16 18:01:35         39 DeadlineCloud/Data/87cb19095dd5d78fcaf56384ef0e6241.xxh128
+2024-07-16 18:01:34        174 DeadlineCloud/Manifests/farm-caee1e7e3ee347589f25aa68b7c60921/queue-dbfcdf8586ec433aabd8a1b84a7a302d/Inputs/92f159215de446fc846f850c0be9d3c8/a1d221c7fd97b08175b3872a37428e8c_input
+```
 
 - Highlight the ScriptFile job parameter, it's default value being relative to the bundle's directory, and dataFlow IN.
   What that means for job attachments.
