@@ -591,9 +591,121 @@ Output:
 
 - Extend the example bundle to add an output directory. dataFlow OUT job parameter; objectType DIR.
 - Modify the script to also write a file to the output dir (pass in the outdir as an arg).
-- Submit the job.
+
+```yaml
+- name: OutputDir
+  type: PATH
+  objectType: DIRECTORY
+  dataFlow: OUT
+  default: ./output_dir
+  description: This directory the output for all steps.
+```
+
+```bash
+#!/bin/bash
+echo "Script location: $0"
+echo $DATA_DIR
+echo "Script location: $0" >> $DATA_DIR/output.txt
+```
+
 - Mention the path mapping rule being added for the output dir.
-- Show the file that is uploaded to S3, the current S3 object layout, the manifest file, and how to get those using the deadline CLI.
+
+- Submit the job. Notice the new output directory picked up as part of job submission.
+
+```bash
+deadline bundle submit --farm-id farm-e28af39d92b044f8a34905e2e37af257 --queue-id queue-968e9d72a0c8428c81c223ed345d7604 .
+Submitting to Queue: devguide
+Job submission contains 1 input files totaling 106.0 B.  All input files will be uploaded to S3 if they are not already present in the job attachments bucket.
+
+Files were specified outside of the configured storage profile location(s).  Please confirm that you intend to submit a job that uses files from the following directories:
+
+Under the directory '/Users/leongdl/work/docs/deadline-cloud-samples/job_bundles/job_attachments_devguide_output':
+	1 input file
+	1 output directory
+
+To permanently remove this warning you must only use files located within a storage profile location.
+
+Do you wish to proceed? [y/N]: y
+Hashing Attachments  [####################################]  100%
+Hashing Summary:
+    Processed 0 files totaling 0.0 B.
+    Skipped re-processing 1 files totaling 106.0 B.
+    Total processing time of 0.02014 seconds at 0.0 B/s.
+
+Uploading Attachments  [####################################]  100%
+Upload Summary:
+    Processed 0 files totaling 0.0 B.
+    Skipped re-processing 1 files totaling 106.0 B.
+    Total processing time of 2.01995 seconds at 0.0 B/s.
+
+Waiting for Job to be created...
+Submitted job bundle:
+   .
+Job creation completed successfully
+job-06bd6658cf9d441abeb777da62627621
+```
+
+- Show the output file that is uploaded to S3, the current S3 object layout, the manifest file, and how to get those using the deadline CLI. From the task execution logs, we see 1 output file is uploaded.
+
+```shell
+2024/07/16 12:52:01-07:00 ----------------------------------------------
+2024/07/16 12:52:01-07:00 Phase: Running action
+2024/07/16 12:52:01-07:00 ----------------------------------------------
+2024/07/16 12:52:01-07:00 Running command sudo -u job-user -i setsid -w /sessions/session-8cecd25fee5744b2b6fd077b3c428015ej_gw8e8/tmp0l8neab4.sh
+2024/07/16 12:52:01-07:00 Command started as pid: 5525
+2024/07/16 12:52:01-07:00 Output:
+2024/07/16 12:52:01-07:00 Script location: /sessions/session-8cecd25fee5744b2b6fd077b3c428015ej_gw8e8/assetroot-108eb2339989fd3efc91/script.sh Output location: /sessions/session-8cecd25fee5744b2b6fd077b3c428015ej_gw8e8/assetroot-108eb2339989fd3efc91/output_dir
+2024/07/16 12:52:01-07:00 ----------------------------------------------
+2024/07/16 12:52:01-07:00 Uploading output files to Job Attachments
+2024/07/16 12:52:01-07:00 ----------------------------------------------
+2024/07/16 12:52:01-07:00 Started syncing outputs using Job Attachments
+2024/07/16 12:52:01-07:00 Found 1 file totaling 117.0 B in output directory: /sessions/session-8cecd25fee5744b2b6fd077b3c428015ej_gw8e8/assetroot-108eb2339989fd3efc91/output_dir
+2024/07/16 12:52:01-07:00 Uploading output manifest to DeadlineCloud/Manifests/farm-e28af39d92b044f8a34905e2e37af257/queue-968e9d72a0c8428c81c223ed345d7604/job-bc42a388fd104e6b82d9b8345863bd68/step-65f1c3bdfe2745ada20969e8e85cb369/task-65f1c3bdfe2745ada20969e8e85cb369-0/2024-07-16T19:52:01.019926Z_sessionaction-8cecd25fee5744b2b6fd077b3c428015-2/1936166271ff14a8bc619b8367a70baa_output
+2024/07/16 12:52:01-07:00 Uploading 1 output file to S3: devguide-sin/DeadlineCloud/Data
+2024/07/16 12:52:01-07:00 Uploaded 117.0 B / 117.0 B of 1 file (Transfer rate: 0.0 B/s)
+2024/07/16 12:52:01-07:00 Summary Statistics for file uploads:
+Processed 1 file totaling 117.0 B.
+Skipped re-processing 0 files totaling 0.0 B.
+Total processing time of 0.02072 seconds at 5.65 KB/s.
+```
+
+- 
+```
+# The name of queue `Q1`'s job attachments S3 bucket
+JA_S3_BUCKET=$(
+  aws deadline get-queue --farm-id $FARM_ID --queue-id $QUEUE1_ID \
+  | jq -r '.jobAttachmentSettings.s3BucketName'
+)
+
+aws s3 ls s3://$JA_S3_BUCKET/DeadlineCloud/Manifests/$FARM_ID/$QUEUE1_ID --recursive
+
+2024-07-16 12:52:02        188 DeadlineCloud/Manifests/farm-e28af39d92b044f8a34905e2e37af257/queue-968e9d72a0c8428c81c223ed345d7604/job-bc42a388fd104e6b82d9b8345863bd68/step-65f1c3bdfe2745ada20969e8e85cb369/task-65f1c3bdfe2745ada20969e8e85cb369-0/2024-07-16T19:52:01.019926Z_sessionaction-8cecd25fee5744b2b6fd077b3c428015-2/1936166271ff14a8bc619b8367a70baa_output1936166271ff14a8bc619b8367a70baa_input
+```
+
+# Manifest File:
+
+```bash
+aws s3 cp --quiet s3://$JA_S3_BUCKET/DeadlineCloud/Manifests/farm-e28af39d92b044f8a34905e2e37af257/queue-968e9d72a0c8428c81c223ed345d7604/job-bc42a388fd104e6b82d9b8345863bd68/step-65f1c3bdfe2745ada20969e8e85cb369/task-65f1c3bdfe2745ada20969e8e85cb369-0/2024-07-16T19:52:01.019926Z_sessionaction-8cecd25fee5744b2b6fd077b3c428015-2/1936166271ff14a8bc619b8367a70baa_output /dev/stdout
+```
+
+```json
+{"hashAlg":"xxh128","manifestVersion":"2023-03-03","paths":[{"hash":"68dca513065b03125edbef3aba646b3c","mtime":1721159521382983,"path":"output_dir/output.txt","size":117}],"totalSize":117} 
+```
+
+# Layout of files on S3:
+```bash
+aws s3 ls s3://$JA_S3_BUCKET/DeadlineCloud/Data --recursive
+2024-07-16 12:52:02        117 DeadlineCloud/Data/68dca513065b03125edbef3aba646b3c.xxh128
+2024-07-16 12:51:19        152 DeadlineCloud/Data/bbc7dea14822b060d581ca2b3fa8d38a.xxh128
+...
+```
+
+# You can view the output of file as suggested by the script
+```bash
+aws s3 cp --quiet s3://$JA_S3_BUCKET/DeadlineCloud/Data/68dca513065b03125edbef3aba646b3c.xxh128 /dev/stdout
+
+Script location: /sessions/session-8cecd25fee5744b2b6fd077b3c428015ej_gw8e8/assetroot-108eb2339989fd3efc91/script.sh
+```
 
 ### 3.3. Using Files Output from a Step in a Dependent Step
 
