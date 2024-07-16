@@ -201,11 +201,11 @@ WORKER_CFG_ID=sp-00112233445566778899aabbccddeeff
 
 FLEET_WORKER_MODE=$( \
   aws deadline get-fleet --farm-id $FARM_ID --fleet-id $FLEET_ID \
-  | jq '.configuration.customerManaged.mode' \
+    --query 'configuration.customerManaged.mode' \
 )
 FLEET_WORKER_CAPABILITIES=$( \
   aws deadline get-fleet --farm-id $FARM_ID --fleet-id $FLEET_ID \
-  | jq '.configuration.customerManaged.workerCapabilities' \
+    --query 'configuration.customerManaged.workerCapabilities' \
 )
 
 aws deadline update-fleet --farm-id $FARM_ID --fleet-id $FLEET_ID \
@@ -466,6 +466,8 @@ downloads them to the worker host when the job is running. This section demonstr
 identifies the files to upload, how those files are organized in Amazon S3, and how they are made available
 on worker hosts for your jobs to use.
 
+#### 3.1.1. What Job Attachments Uploads to Amazon S3
+
 Start by cloning the  [Deadline Cloud samples GitHub repository](https://github.com/aws-deadline/deadline-cloud-samples) into your 
 [AWS CloudShell](https://docs.aws.amazon.com/cloudshell/latest/userguide/welcome.html) environment, and copying the
 `job_attachments_devguide` job bundle into your home directory:
@@ -499,13 +501,15 @@ an input to the job. The value of `default` is a relative location to the job bu
 path. Putting those together, this means that the `script.sh` file in the job bundle's directory is an input file that is required
 for this job to run.
 
-Next, submit the job to queue `Q1` and you'll see that a single file is hashed and then uploaded:
+Next, ensure that the Deadline Cloud CLI does not have a storage profile configured and submit the job to queue `Q1`:
 
 ```bash
 # Change the value of FARM_ID to your farm's identifier
 FARM_ID=farm-00112233445566778899aabbccddeeff
 # Change the value of QUEUE1_ID to queue Q1's identifier
 QUEUE1_ID=queue-00112233445566778899aabbccddeeff
+
+deadline config set settings.storage_profile_id ''
 
 deadline bundle submit --farm-id $FARM_ID --queue-id $QUEUE1_ID job_attachments_devguide/
 ```
@@ -534,31 +538,201 @@ Job creation completed successfully
 job-74148c13342e4514b63c7a7518657005
 ```
 
+Two things happened here. First the `script.sh` file was hashed, and then it was uploaded to Amazon S3.
+
+Deadline Cloud's job attachments treats the S3 bucket as a [content-addressable storage](https://en.wikipedia.org/wiki/Content-addressable_storage).
+Your files are uploaded to objects whose name is derived from the hash of that file's contents. If two files have identical content, then
+they have the same hash value regardless of where the files are located or what they are named. This allows job attachments to
+avoid uploading a file if it has previously been uploaded and is still available. So, the first step is calculating the
+hash of the `script.sh` file and then checking S3 to determine whether or not the file had previously been uploaded.
+
 You can use the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-welcome.html) to see the objects that were
 uploaded to Amazon S3:
 
 ```bash
 # The name of queue `Q1`'s job attachments S3 bucket
-JA_S3_BUCKET=$(
+Q1_S3_BUCKET=$(
   aws deadline get-queue --farm-id $FARM_ID --queue-id $QUEUE1_ID \
-  | jq -r '.jobAttachmentSettings.s3BucketName'
+    --query 'jobAttachmentSettings.s3BucketName' | tr -d '"'
 )
 
-aws s3 ls s3://$JA_S3_BUCKET --recursive
+aws s3 ls s3://$Q1_S3_BUCKET --recursive
 ```
 
-Output:
+Notice that two objects were uploaded to S3:
+
+1. `DeadlineCloud/Data/87cb19095dd5d78fcaf56384ef0e6241.xxh128` -- The contents of `script.sh`. The value `87cb19095dd5d78fcaf56384ef0e6241`
+   is the hash of the file's contents, and the extension `xxh128` indicates that the hash value was calculated as a 128 bit [xxhash](https://xxhash.com/).
+2. `DeadlineCloud/Manifests/<farm-id>/<queue-id>/Inputs/<guid>/a1d221c7fd97b08175b3872a37428e8c_input` -- A manifest object (described below) 
+   for the job submission. The values `<farm-id>`, `<queue-id>`, and `<guid>` are shorthand here for brevity; they are your farm identifier,
+   queue identifier, and a random hexidecimal value, respectively. The value `a1d221c7fd97b08175b3872a37428e8c` in this example is a hash
+   value calculated from the string `/home/cloudshell-user/job_attachments_devguide` -- the directory where `script.sh` is located.
+
+The manifest object contains all of the information for the input files ***from a specific root path*** 
+(see: [How Job Attachments Decides What to Upload to Amazon S3](#312-how-job-attachments-decides-what-to-upload-to-amazon-s3) for more
+on root paths) that were uploaded to Amazon S3 as part of the job's submission. Downloading this manifest file
+(`aws s3 cp s3://$Q1_S3_BUCKET/<objectname>`) and viewing its contents you will see:
+
+```json
+{
+    "hashAlg": "xxh128",
+    "manifestVersion": "2023-03-03",
+    "paths": [
+        {
+            "hash": "87cb19095dd5d78fcaf56384ef0e6241",
+            "mtime": 1721147454416085,
+            "path": "script.sh",
+            "size": 39
+        }
+    ],
+    "totalSize": 39
+}
+```
+
+Notably, this is saying that the file named `script.sh` was uploaded, and the hash of that file's contents is `87cb19095dd5d78fcaf56384ef0e6241` which
+matches the value in the object name `DeadlineCloud/Data/87cb19095dd5d78fcaf56384ef0e6241.xxh128` so that job attachments knows which object to
+download for this file's contents. If you are curious, the full schema for this file is
+[available in GitHub](https://github.com/aws-deadline/deadline-cloud/tree/mainline/src/deadline/job_attachments/asset_manifests/schemas).
+
+Aside: The locations of the manifest objects for a job submission is provided as part of the `attachments` property
+when calling [Deadline Cloud's `CreateJob` API](https://docs.aws.amazon.com/deadline-cloud/latest/APIReference/API_CreateJob.html). 
+You can see this in the output from [Deadline Cloud's GetJob API](https://docs.aws.amazon.com/deadline-cloud/latest/APIReference/API_GetJob.html):
+
+```json
+{
+    "attachments": {
+        "fileSystem": "COPIED",
+        "manifests": [
+            {
+                "inputManifestHash": "5b0db3d311805ea8de7787b64cbbe8b3",
+                "inputManifestPath": "<farm-id>/<queue-id>/Inputs/<guid>/a1d221c7fd97b08175b3872a37428e8c_input",
+                "rootPath": "/home/cloudshell-user/job_attachments_devguide",
+                "rootPathFormat": "posix"
+            }
+        ]
+    },
+    ...
+}
+```
+
+#### 3.1.2. How Job Attachments Decides What to Upload to Amazon S3
+
+The files and directories that job attachments considers for upload to Amazon S3 as inputs to your job are:
+
+1. The values of all `PATH`-type job parameters that are defined in the job bundle's job template
+   with a `dataFlow` value of `IN` or `INOUT`; and
+2. The files and directories listed as inputs in the job bundle's
+   [asset references file](https://github.com/aws-deadline/deadline-cloud-samples/tree/mainline/job_bundles#elements---asset-references).
+
+If you submit a job with no storage profile, as you did in [What Job Attachments Uploads to Amazon S3](#311-what-job-attachments-uploads-to-amazon-s3),
+then all of the files considered for uploading will be uploaded. If you submit a job with a storage profile to a queue, then the filesystem locations
+in that storage profile as well as the required filesystem locations on the queue both inform which of those inputs files are uploaded to Amazon S3.
+
+To explore job attachments' behaviour, create the `SHARED` filesystem locations in `WSAll`, and add some files to all of these filesystem locations:
 
 ```bash
-2024-07-16 18:01:35         39 DeadlineCloud/Data/87cb19095dd5d78fcaf56384ef0e6241.xxh128
-2024-07-16 18:01:34        174 DeadlineCloud/Manifests/farm-caee1e7e3ee347589f25aa68b7c60921/queue-dbfcdf8586ec433aabd8a1b84a7a302d/Inputs/92f159215de446fc846f850c0be9d3c8/a1d221c7fd97b08175b3872a37428e8c_input
+# Change the value of WSALL_ID to the identifier of the WSAll storage profile
+WSALL_ID=sp-00112233445566778899aabbccddeeff
+
+sudo mkdir -p /shared/common /shared/projects/project1 /shared/projects/project2
+sudo chown -R cloudshell-user:cloudshell-user /shared
+
+for d in /shared/common /shared/projects/project1 /shared/projects/project2; do
+  echo "File contents for $d" > ${d}/file.txt
+done
 ```
 
-- Highlight the ScriptFile job parameter, it's default value being relative to the bundle's directory, and dataFlow IN.
-  What that means for job attachments.
-- Configure deadline CLI for farm & Q1. Submit the job using the deadline CLI. Point out that the script file was uploaded.
-- `deadline job get` to show the manifest.
-- Show layout of objects in S3.
+Next, add an asset references file to the job bundle that includes all of these files as inputs for the job:
+
+```yaml
+cat > ${HOME}/job_attachments_devguide/asset_references.yaml << EOF
+assetReferences:
+  inputs:
+    filenames:
+    - /shared/common/file.txt
+    directories:
+    - /shared/projects/project1
+    - /shared/projects/project2
+EOF
+```
+
+Then, configure the Deadline Cloud CLI to submit jobs with the `WSAll` storage profile, and submit the job bundle:
+
+```bash
+deadline config set settings.storage_profile_id $WSALL_ID
+
+deadline bundle submit --farm-id $FARM_ID --queue-id $QUEUE1_ID job_attachments_devguide/
+```
+
+Notice that 3 files are uploaded to Amazon S3 when the job is submitted. Download the manifest objects for the job from Amazon S3
+to see which files were uploaded:
+
+```bash
+for manifest in $( \
+  aws deadline get-job --farm-id $FARM_ID --queue-id $QUEUE1_ID --job-id $JOB_ID \
+    --query 'attachments.manifests[].inputManifestPath' \
+    | jq -r '.[]'
+); do
+  aws s3 cp s3://$Q1_S3_BUCKET/DeadlineCloud/Manifests/$manifest manifest.json
+  echo "Manifest object: $manifest"
+  cat manifest.json
+done
+```
+
+There is a single manifest file with contents:
+
+```json
+{
+    "hashAlg": "xxh128",
+    "manifestVersion": "2023-03-03",
+    "paths": [
+        {
+            "hash": "87cb19095dd5d78fcaf56384ef0e6241",
+            "mtime": 1721147454416085,
+            "path": "home/cloudshell-user/job_attachments_devguide/script.sh",
+            "size": 39
+        },
+        {
+            "hash": "af5a605a3a4e86ce7be7ac5237b51b79",
+            "mtime": 1721163773582362,
+            "path": "shared/projects/project2/file.txt",
+            "size": 44
+        }
+    ],
+    "totalSize": 83
+}
+```
+
+Looking at the result from the GetJob API for this manifest, then you will see that the `rootPath` is "/" for this manifest:
+
+```bash
+aws deadline get-job --farm-id $FARM_ID --queue-id $QUEUE1_ID --job-id $JOB_ID --query 'attachments.manifests[*]'
+```
+
+The `rootPath` of a set of input files is always the longest common subpath of those files. If your job was submitted from, say,
+Windows instead and you had inputs on different drives then you would see a separate `rootPath` for each drive.
+The paths in a manifest are always relative to the `rootPath` of the manifest, so the input files that were uploaded are:
+
+1. `/home/cloudshell-user/job_attachments_devguide/script.sh`: The script file within the job bundle.
+2. `/shared/projects/project2/file.txt`: The file within a `SHARED` filesystem location in the `WSAll` storage profile that is **not** in
+   the list of required filesystem locations on queue `Q1`.
+
+Notice that the files contained in filesystem locations `FSComm` and `FS1` are not in that list. This is because those filesystem locations
+are `SHARED` and they both appear in the list of required filesystem locations on the queue that the job was submitted to.
+
+Aside: You can see which filesystem locations are considered `SHARED` for a job submitted with a particular storage profile by querying
+Deadline Cloud's GetStorageProfileForQueue API. Query that API for storage profile `WSAll` and queue `Q1` and compare that against the
+storage profile `WSAll`:
+
+```bash
+aws deadline get-storage-profile --farm-id $FARM_ID --storage-profile-id $WSALL_ID
+
+aws deadline get-storage-profile-for-queue --farm-id $FARM_ID --queue-id $QUEUE1_ID --storage-profile-id $WSALL_ID
+```
+
+#### 3.1.3. How Jobs Find Job Attachment's Input Files
+
+
 - Modify the script file to print the contents of the path mapping rules file (pass an arg that is the file location & cat it)
 - Resubmit the job. Point out that the script file uploaded because it changed.
 - Show that job attachments adds to the list of path mapping rules.
@@ -571,21 +745,6 @@ Output:
   - Submit the job.
   - Show the path mapping rules that result. Talk about the location of the new file not being available in the
     job template.
-
-- Something about asset roots? How they're determined?
-
-#### 3.1.1. Input Files with Storage Profiles
-
-- Make one of the `WSAll` dirs and add a file to it. 
-- Add that file to the asset references input files list.
-- Submit the job, and show that the newly added file is not uploaded.
-
-- Copy the script file outside of the bundle dir (e.g. to /tmp/job_inputs). Show that there's a permissions prompt when submitting.
-- Then set LOCAL filesystem location. Submit to demonstrate that the prompt no longer appears.
-
-- Do a submission with no storage profile. All files are uploaded via job attachments.
-
-- Need to include something customer-facing on why this is the way that it is.
 
 ### 3.2. Getting Output Files from a Job
 
