@@ -1,6 +1,9 @@
 #!/bin/bash
 
-echo "Script location: $0 Output location: $1"
+echo "Script location: $0 Output location: $1 Path mapping file: $2"
+echo "Path Mapping:"
+cat $2
+
 export OUTPUT_DIR=$1
 mkdir $OUTPUT_DIR
 echo "Script location: $0" >> $OUTPUT_DIR/output.txt

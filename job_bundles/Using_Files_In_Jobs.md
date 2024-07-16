@@ -748,8 +748,7 @@ aws deadline get-storage-profile-for-queue --farm-id $FARM_ID --queue-id $QUEUE1
 
 ### 3.2. Getting Output Files from a Job
 
-- Extend the example bundle to add an output directory. dataFlow OUT job parameter; objectType DIR.
-- Modify the script to also write a file to the output dir (pass in the outdir as an arg).
+In this next section, we will add an output to the existing example. The Modified bundle is available under `job_bundles/job_attachments_devguide_output`. First, we will add a new directory parameter `OutputDir`, with `dataFlow: OUT`. This parameter will tell where Deadline Cloud can find output files. 
 
 ```yaml
 - name: OutputDir
@@ -758,33 +757,36 @@ aws deadline get-storage-profile-for-queue --farm-id $FARM_ID --queue-id $QUEUE1
   dataFlow: OUT
   default: ./output_dir
   description: This directory the output for all steps.
+...
+  script:
+    actions:
+      onRun:
+        command: /bin/bash
+        args: ['{{Param.ScriptFile}}', '{{Param.OutputDir}}', '{{Session.PathMappingRulesFile}}']
 ```
+
+Next, the example script is modified to output the script location to `output.txt`. Note the output directory is passed to the script as an argument in the template. 
 
 ```bash
 #!/bin/bash
-echo "Script location: $0"
-echo $DATA_DIR
-echo "Script location: $0" >> $DATA_DIR/output.txt
+echo "Script location: $0 Output location: $1 Path mapping file: $2"
+echo "Path Mapping:"
+cat $2
+
+export OUTPUT_DIR=$1
+mkdir $OUTPUT_DIR
+echo "Script location: $0" >> $OUTPUT_DIR/output.txt
 ```
 
-- Mention the path mapping rule being added for the output dir.
+Now, submit the job bundle. Notice "1 output directory" is picked up as part of job submission.
+```
+deadline bundle submit --farm-id $FARM_ID --queue-id $QUEUE1_ID job_attachments_devguide_output/
+```
 
-- Submit the job. Notice the new output directory picked up as part of job submission.
-
+Output:
 ```bash
-deadline bundle submit --farm-id farm-e28af39d92b044f8a34905e2e37af257 --queue-id queue-968e9d72a0c8428c81c223ed345d7604 .
-Submitting to Queue: devguide
-Job submission contains 1 input files totaling 106.0 B.  All input files will be uploaded to S3 if they are not already present in the job attachments bucket.
-
-Files were specified outside of the configured storage profile location(s).  Please confirm that you intend to submit a job that uses files from the following directories:
-
-Under the directory '/Users/leongdl/work/docs/deadline-cloud-samples/job_bundles/job_attachments_devguide_output':
-	1 input file
-	1 output directory
-
-To permanently remove this warning you must only use files located within a storage profile location.
-
-Do you wish to proceed? [y/N]: y
+Submitting to Queue: Q1
+...
 Hashing Attachments  [####################################]  100%
 Hashing Summary:
     Processed 0 files totaling 0.0 B.
@@ -799,12 +801,13 @@ Upload Summary:
 
 Waiting for Job to be created...
 Submitted job bundle:
-   .
+   job_attachments_devguide_output/
 Job creation completed successfully
 job-06bd6658cf9d441abeb777da62627621
 ```
 
-- Show the output file that is uploaded to S3, the current S3 object layout, the manifest file, and how to get those using the deadline CLI. From the task execution logs, we see 1 output file is uploaded.
+Now that the Job is submitted, we can look at the Session execution logs. From the Deadline Cloud Monitor, select the Job, Step, Task. Right click for the context menu and view logs to open up the portal. From the task execution logs, we see 1 output file is uploaded.
+ - Question do we also want a CLI command for this?
 
 ```shell
 2024/07/16 12:52:01-07:00 ----------------------------------------------
@@ -828,30 +831,40 @@ Skipped re-processing 0 files totaling 0.0 B.
 Total processing time of 0.02072 seconds at 5.65 KB/s.
 ```
 
-- 
+From the logs, we can see 1 file is found in the output directory. The file is uploaded to Job Attachments Storage, and an output manifest relating the Session to the output is also uploaded. Next, lets download the Output Manifest file and take take a look at the contents.
+
+The output directory on the worker can also be dervied via path mapping rules. In addition to `Param.OutputDir` parameter, `Session.PathMappingRulesFile` is also available in the Step template. Printing out the path mapping rules in the script results in the following output. Note the `source_path` coming from the submitting work station, and `destination_path` on the worker.
+
+```json
+{
+   "version":"pathmapping-1.0",
+   "path_mapping_rules":[
+      {
+         "source_path_format":"POSIX",
+         "source_path":"/job_bundles/job_attachments_devguide_output",
+         "destination_path":"/sessions/session-8cecd25fee5744b2b6fd077b3c428015ej_gw8e8/assetroot-108eb2339989fd3efc91"
+      }
+   ]
+}
 ```
-# The name of queue `Q1`'s job attachments S3 bucket
-JA_S3_BUCKET=$(
-  aws deadline get-queue --farm-id $FARM_ID --queue-id $QUEUE1_ID \
-  | jq -r '.jobAttachmentSettings.s3BucketName'
-)
 
-aws s3 ls s3://$JA_S3_BUCKET/DeadlineCloud/Manifests/$FARM_ID/$QUEUE1_ID --recursive
+#### Output Manifest File:
 
-2024-07-16 12:52:02        188 DeadlineCloud/Manifests/farm-e28af39d92b044f8a34905e2e37af257/queue-968e9d72a0c8428c81c223ed345d7604/job-bc42a388fd104e6b82d9b8345863bd68/step-65f1c3bdfe2745ada20969e8e85cb369/task-65f1c3bdfe2745ada20969e8e85cb369-0/2024-07-16T19:52:01.019926Z_sessionaction-8cecd25fee5744b2b6fd077b3c428015-2/1936166271ff14a8bc619b8367a70baa_output1936166271ff14a8bc619b8367a70baa_input
-```
-
-# Manifest File:
+First, lets download the Output manifest generated from the job execution.
 
 ```bash
 aws s3 cp --quiet s3://$JA_S3_BUCKET/DeadlineCloud/Manifests/farm-e28af39d92b044f8a34905e2e37af257/queue-968e9d72a0c8428c81c223ed345d7604/job-bc42a388fd104e6b82d9b8345863bd68/step-65f1c3bdfe2745ada20969e8e85cb369/task-65f1c3bdfe2745ada20969e8e85cb369-0/2024-07-16T19:52:01.019926Z_sessionaction-8cecd25fee5744b2b6fd077b3c428015-2/1936166271ff14a8bc619b8367a70baa_output /dev/stdout
 ```
 
+Output: 
 ```json
 {"hashAlg":"xxh128","manifestVersion":"2023-03-03","paths":[{"hash":"68dca513065b03125edbef3aba646b3c","mtime":1721159521382983,"path":"output_dir/output.txt","size":117}],"totalSize":117} 
 ```
 
-# Layout of files on S3:
+The output manifest uses the same asset manifest schema. The job output file `output_dir/output.txt` hashes to `68dca513065b03125edbef3aba646b3c`. `output.txt` is found by job attachments on the worker because the file resides in `output_dir`, which is modeled a `dataFlow` `OUT` parameter.
+
+Finally, we can list the content address storage data directory again to find all stored content. Note that two files now exist in the `Data` directory. The initial script input file, and the output file,`68dca513065b03125edbef3aba646b3c.xxh128` corresponding to the manifest.
+
 ```bash
 aws s3 ls s3://$JA_S3_BUCKET/DeadlineCloud/Data --recursive
 2024-07-16 12:52:02        117 DeadlineCloud/Data/68dca513065b03125edbef3aba646b3c.xxh128
@@ -859,10 +872,13 @@ aws s3 ls s3://$JA_S3_BUCKET/DeadlineCloud/Data --recursive
 ...
 ```
 
-# You can view the output of file as suggested by the script
+Finally we can download and pipe the output file to stdout to verify the contents of `output.txt` is correctly uploaded.
+
 ```bash
 aws s3 cp --quiet s3://$JA_S3_BUCKET/DeadlineCloud/Data/68dca513065b03125edbef3aba646b3c.xxh128 /dev/stdout
-
+```
+Output:
+```
 Script location: /sessions/session-8cecd25fee5744b2b6fd077b3c428015ej_gw8e8/assetroot-108eb2339989fd3efc91/script.sh
 ```
 

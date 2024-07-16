@@ -23,7 +23,7 @@ steps:
     actions:
       onRun:
         command: /bin/bash
-        args: ['{{Param.ScriptFile}}', '{{Param.OutputDir}}']
+        args: ['{{Param.ScriptFile}}', '{{Param.OutputDir}}', '{{Session.PathMappingRulesFile}}']
 
 
 # Final form, after all modifications outlined in the Developer Guide.
